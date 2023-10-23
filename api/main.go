@@ -8,16 +8,18 @@ import (
 	"net/http"
 )
 
-var mapDatabase map[string]Product
+var mapDatabase map[string]Car
 
-type Product struct {
+type Car struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Color       string `json:"color"`
+	Brand       string `json:"brand"`
 }
 
-func newSimulationDatabase() map[string]Product {
-	return map[string]Product{}
+func newSimulationDatabase() map[string]Car {
+	return map[string]Car{}
 }
 
 func init() {
@@ -39,13 +41,14 @@ func main() {
 		panic(err)
 	}
 
-	if err = sonicIngester.Ping(); err != nil {
-		fmt.Println(err.Error())
-	}
+	defer func() {
+		err := sonicSearch.Quit()
+		err = sonicIngester.Quit()
 
-	if err = sonicSearch.Ping(); err != nil {
-		fmt.Println(err.Error())
-	}
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	router := gin.Default()
 
@@ -53,47 +56,47 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "ok"})
 	})
 
-	router.POST("/product", func(c *gin.Context) {
-		product := &Product{}
+	router.POST("/car", func(c *gin.Context) {
+		car := &Car{}
 
-		if err := c.BindJSON(product); err != nil {
+		if err := c.BindJSON(car); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		product.ID = uuid.New().String()
+		car.ID = uuid.New().String()
 
-		mapDatabase[product.ID] = *product
+		mapDatabase[car.ID] = *car
 		//Salvar na base
 
 		if err := sonicIngester.Push(
-			"products",
+			"vehicles",
 			"default",
-			product.ID,
-			fmt.Sprintf("%s %s", product.Name, product.Description),
+			car.ID,
+			fmt.Sprintf("%s %s %s %s", car.Name, car.Description, car.Color, car.Brand),
 			"por"); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		c.JSON(http.StatusCreated, product)
+		c.JSON(http.StatusCreated, car)
 
 	})
 
-	router.GET("/product", func(c *gin.Context) {
+	router.GET("/car", func(c *gin.Context) {
 		query := c.Query("q")
 		if query == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "query param q is required"})
 			return
 		}
 
-		results, err := sonicSearch.Query("products", "default", query, 10, 0, "por")
+		results, err := sonicSearch.Query("vehicles", "default", query, 10, 0, "por")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		products := []Product{}
+		products := []Car{}
 
 		//buscar na base
 		for _, result := range results {
@@ -104,6 +107,89 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, products)
+	})
+
+	router.GET("/car/suggests", func(c *gin.Context) {
+		suggest := c.Query("suggest")
+
+		if suggest == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "query param term is required"})
+			return
+		}
+
+		results, err := sonicSearch.Suggest(
+			"vehicles",
+			"default",
+			fmt.Sprintf("%s", suggest),
+			10,
+		)
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, results)
+
+	})
+
+	router.GET("/cars", func(context *gin.Context) {
+
+		count := 0
+
+		cars := []Car{}
+
+		for _, value := range mapDatabase {
+			cars = append(cars, value)
+
+			countItem, err := sonicIngester.Count(
+				"vehicles",
+				"default",
+				value.ID,
+			)
+			if err != nil {
+				fmt.Println("error on get count: " + err.Error())
+			}
+			count = count + countItem
+
+		}
+
+		context.JSON(http.StatusOK, struct {
+			Count int   `json:"count"`
+			Items []Car `json:"items"`
+		}{
+			Count: count,
+			Items: cars,
+		})
+
+	})
+
+	router.DELETE("/car/:id", func(c *gin.Context) {
+
+		carId := c.Param("id")
+
+		if carId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "query param term is required"})
+			return
+		}
+
+		for key, value := range mapDatabase {
+			if value.ID == carId {
+				delete(mapDatabase, key)
+			}
+		}
+
+		if err = sonicIngester.FlushObject(
+			"vehicles",
+			"default",
+			carId,
+		); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusNoContent, gin.H{"message": "deleted successfully"})
+
 	})
 
 	router.Run(":3333")
