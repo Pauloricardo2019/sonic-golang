@@ -1,0 +1,10 @@
+version: '3'
+services:
+  sonic:
+    image: valeriansaliou/sonic:v1.4.3
+    ports:
+      - "1491:1491"
+    volumes:
+      - /home/paulo/Documentos/Pessoais/sonic-golang/sonic/sonic.cfg:/etc/sonic.cfg
+      - /home/paulo/Documentos/Pessoais/sonic-golang/sonic/store/:/var/lib/sonic/store/
+    restart: always
